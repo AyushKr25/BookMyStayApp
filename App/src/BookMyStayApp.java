@@ -1,64 +1,44 @@
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.Map;
-import java.util.Queue;
 
 /**
  * ====================================================================
- * DOMAIN MODEL - Reservation
+ * DOMAIN MODEL - PersistentRoomInventory
  * ====================================================================
+ * Implements Serializable to allow the object's state to be saved
+ * to and restored from a file.
  */
-class Reservation {
-    private String guestName;
-    private String requestedRoomType;
+class PersistentRoomInventory implements Serializable {
+    // Recommended for Serializable classes to ensure version compatibility
+    private static final long serialVersionUID = 1L;
 
-    public Reservation(String guestName, String requestedRoomType) {
-        this.guestName = guestName;
-        this.requestedRoomType = requestedRoomType;
-    }
-
-    public String getGuestName() { return guestName; }
-    public String getRequestedRoomType() { return requestedRoomType; }
-}
-
-/**
- * ====================================================================
- * THREAD-SAFE COMPONENT - SharedRoomInventory
- * ====================================================================
- * Manages inventory. Methods that read and modify state are synchronized
- * to prevent race conditions during concurrent access.
- */
-class SharedRoomInventory {
     private Map<String, Integer> inventory;
 
-    public SharedRoomInventory() {
+    public PersistentRoomInventory() {
         inventory = new HashMap<>();
-        // Intentionally setting low availability to force contention among threads
-        inventory.put("Single Room", 2);
-        inventory.put("Double Room", 1);
+        // Default fresh state
+        inventory.put("Single Room", 15);
+        inventory.put("Double Room", 10);
     }
 
-    /**
-     * CRITICAL SECTION: Synchronized method ensures only one thread can
-     * check availability and update inventory at any given time.
-     */
-    public synchronized boolean bookRoom(String roomType) {
-        int available = inventory.getOrDefault(roomType, 0);
-
-        if (available > 0) {
-            // Simulate processing delay to expose race conditions (if it wasn't synchronized)
-            try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-
-            // Deduct from inventory
-            inventory.put(roomType, available - 1);
-            return true;
-        }
-        return false; // No availability
+    public int getAvailability(String roomType) {
+        return inventory.getOrDefault(roomType, 0);
     }
 
-    public synchronized void displayInventory() {
+    public void updateInventory(String roomType, int count) {
+        inventory.put(roomType, count);
+    }
+
+    public void displayInventory() {
         System.out.println("--------------------------------------------------");
-        System.out.println("            FINAL ROOM INVENTORY STATE            ");
+        System.out.println("            CURRENT ROOM INVENTORY                ");
         System.out.println("--------------------------------------------------");
         for (Map.Entry<String, Integer> entry : inventory.entrySet()) {
             System.out.println(entry.getKey() + ": " + entry.getValue() + " available");
@@ -69,70 +49,40 @@ class SharedRoomInventory {
 
 /**
  * ====================================================================
- * THREAD-SAFE COMPONENT - SharedBookingQueue
+ * SERVICE COMPONENT - PersistenceService
  * ====================================================================
- * A queue that multiple threads can safely read from and write to.
+ * Handles writing (Serialization) and reading (Deserialization)
+ * of the system state to/from a durable file.
  */
-class SharedBookingQueue {
-    private Queue<Reservation> requestQueue;
+class PersistenceService {
+    private static final String FILE_NAME = "inventory_state.ser";
 
-    public SharedBookingQueue() {
-        this.requestQueue = new LinkedList<>();
-    }
-
-    public synchronized void addRequest(Reservation reservation) {
-        requestQueue.offer(reservation);
+    /**
+     * Serializes the inventory object and saves it to a file.
+     */
+    public static void saveState(PersistentRoomInventory inventory) {
+        // Using Try-With-Resources to automatically close the streams
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(FILE_NAME))) {
+            oos.writeObject(inventory);
+            System.out.println("SUCCESS: System state successfully persisted to '" + FILE_NAME + "'.");
+        } catch (IOException e) {
+            System.out.println("ERROR: Failed to save system state. " + e.getMessage());
+        }
     }
 
     /**
-     * Safely retrieves and removes the next request from the queue.
+     * Attempts to load and deserialize the inventory object from a file.
+     * Fails gracefully if the file does not exist.
      */
-    public synchronized Reservation pollRequest() {
-        return requestQueue.poll();
-    }
-}
-
-/**
- * ====================================================================
- * WORKER THREAD - ConcurrentBookingProcessor
- * ====================================================================
- * Represents a worker thread that processes requests from the shared queue.
- */
-class ConcurrentBookingProcessor implements Runnable {
-    private SharedBookingQueue queue;
-    private SharedRoomInventory inventory;
-    private String processorName;
-
-    public ConcurrentBookingProcessor(SharedBookingQueue queue, SharedRoomInventory inventory, String processorName) {
-        this.queue = queue;
-        this.inventory = inventory;
-        this.processorName = processorName;
-    }
-
-    @Override
-    public void run() {
-        while (true) {
-            // 1. Safely dequeue a request
-            Reservation req = queue.pollRequest();
-
-            // If queue is empty, the thread's work is done
-            if (req == null) {
-                break;
-            }
-
-            System.out.println(processorName + " is processing request for: " + req.getGuestName());
-
-            // 2. Attempt to book the room safely
-            boolean success = inventory.bookRoom(req.getRequestedRoomType());
-
-            if (success) {
-                System.out.println(" >>> SUCCESS: " + processorName + " booked a " + req.getRequestedRoomType() + " for " + req.getGuestName());
-            } else {
-                System.out.println(" >>> FAILED: " + processorName + " could not book a " + req.getRequestedRoomType() + " for " + req.getGuestName() + " (Out of Stock)");
-            }
-
-            // Yield to encourage thread context switching for the simulation
-            Thread.yield();
+    public static PersistentRoomInventory loadState() {
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(FILE_NAME))) {
+            return (PersistentRoomInventory) ois.readObject();
+        } catch (FileNotFoundException e) {
+            System.out.println("WARNING: No previous state found. Starting fresh.");
+            return null;
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println("ERROR: Failed to restore system state. File may be corrupted. " + e.getMessage());
+            return null;
         }
     }
 }
@@ -142,52 +92,55 @@ class ConcurrentBookingProcessor implements Runnable {
  * MAIN CLASS - Application Entry
  * ====================================================================
  *
- * Use Case 11: Concurrent Booking Simulation (Thread Safety)
+ * Use Case 12: Data Persistence & System Recovery
+ *
+ * Description:
+ * Demonstrates stateful system design by saving the application state
+ * to disk upon shutdown and restoring it upon startup.
  *
  * @author Developer
- * @version 11.0
+ * @version 12.0
  */
 public class BookMyStayApp {
 
     public static void main(String[] args) {
         System.out.println("Welcome to the Hotel Booking Management System");
-        System.out.println("System initialized successfully. Starting Concurrent Simulation...\n");
+        System.out.println("System starting up...\n");
 
-        // 1. Initialize Shared Resources
-        SharedRoomInventory sharedInventory = new SharedRoomInventory();
-        SharedBookingQueue sharedQueue = new SharedBookingQueue();
+        // 1. Startup & Recovery Phase
+        System.out.println("--- System Recovery Phase ---");
+        System.out.println("Attempting to recover previous system state...");
 
-        // 2. Load the Queue with more requests than available rooms
-        // We only have 2 Single Rooms and 1 Double Room available.
-        sharedQueue.addRequest(new Reservation("Alice", "Single Room"));
-        sharedQueue.addRequest(new Reservation("Bob", "Single Room"));
-        sharedQueue.addRequest(new Reservation("Charlie", "Single Room")); // Should fail
-        sharedQueue.addRequest(new Reservation("Diana", "Double Room"));
-        sharedQueue.addRequest(new Reservation("Eve", "Double Room"));     // Should fail
+        PersistentRoomInventory inventory = PersistenceService.loadState();
 
-        // 3. Create Multiple Booking Processor Threads (Simulating concurrent users/servers)
-        Thread t1 = new Thread(new ConcurrentBookingProcessor(sharedQueue, sharedInventory, "Worker-Thread-1"));
-        Thread t2 = new Thread(new ConcurrentBookingProcessor(sharedQueue, sharedInventory, "Worker-Thread-2"));
-        Thread t3 = new Thread(new ConcurrentBookingProcessor(sharedQueue, sharedInventory, "Worker-Thread-3"));
-
-        // 4. Start concurrent execution
-        System.out.println("--- Processing Bookings Concurrently ---");
-        t1.start();
-        t2.start();
-        t3.start();
-
-        // 5. Wait for all threads to finish processing before showing final state
-        try {
-            t1.join();
-            t2.join();
-            t3.join();
-        } catch (InterruptedException e) {
-            System.out.println("Main thread interrupted.");
+        if (inventory == null) {
+            System.out.println("Initializing fresh system state...");
+            inventory = new PersistentRoomInventory();
+        } else {
+            System.out.println("SUCCESS: System state restored successfully.");
         }
 
-        System.out.println("\nAll worker threads have finished processing.");
+        System.out.println("\n--- Current System State ---");
+        inventory.displayInventory();
 
-        // 6. Display final inventory to prove no double-booking occurred (Inventory shouldn't drop below 0)
-        sharedInventory.displayInventory();
+        // 2. Simulate Business Activity
+        System.out.println("--- Simulating Business Activity ---");
+        int currentAvail = inventory.getAvailability("Single Room");
+        if(currentAvail > 0) {
+            System.out.println("Action: Guest booked 1 'Single Room'. Decrementing inventory...");
+            inventory.updateInventory("Single Room", currentAvail - 1);
+        } else {
+            System.out.println("Action: 'Single Room' is out of stock. No changes made.");
+        }
+
+        System.out.println("\n--- Updated System State ---");
+        inventory.displayInventory();
+
+        // 3. Shutdown & Persistence Phase
+        System.out.println("--- System Shutdown Phase ---");
+        System.out.println("Saving system state before shutdown...");
+        PersistenceService.saveState(inventory);
+
+        System.out.println("\nSystem gracefully shut down.");
     }
 }
