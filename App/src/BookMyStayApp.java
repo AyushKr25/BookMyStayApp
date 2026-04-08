@@ -1,107 +1,50 @@
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  * ====================================================================
- * CUSTOM EXCEPTION - InvalidBookingException
+ * INTERFACE ABSTRACTION - PaymentStrategy
  * ====================================================================
- * Domain-specific exception used to represent invalid booking scenarios.
+ * Defines a common contract for all payment methods.
  */
-class InvalidBookingException extends Exception {
-    public InvalidBookingException(String message) {
-        super(message);
-    }
+interface PaymentStrategy {
+    void pay(double amount);
 }
 
 /**
  * ====================================================================
- * DOMAIN MODEL - Reservation
+ * CONCRETE STRATEGIES - Implementations of PaymentStrategy
  * ====================================================================
  */
-class Reservation {
-    private String guestName;
-    private String requestedRoomType;
-
-    public Reservation(String guestName, String requestedRoomType) {
-        this.guestName = guestName;
-        this.requestedRoomType = requestedRoomType;
-    }
-
-    public String getGuestName() { return guestName; }
-    public String getRequestedRoomType() { return requestedRoomType; }
-
+class CreditCardPayment implements PaymentStrategy {
     @Override
-    public String toString() {
-        return "Reservation Request [Guest: '" + guestName + "' | Room Type: '" + requestedRoomType + "']";
+    public void pay(double amount) {
+        System.out.println("Processing Credit Card payment of $" + amount);
+    }
+}
+
+class UPIPayment implements PaymentStrategy {
+    @Override
+    public void pay(double amount) {
+        System.out.println("Processing UPI payment of $" + amount);
+    }
+}
+
+class CashPayment implements PaymentStrategy {
+    @Override
+    public void pay(double amount) {
+        System.out.println("Processing Cash payment of $" + amount);
     }
 }
 
 /**
  * ====================================================================
- * INVENTORY COMPONENT - RoomInventory
+ * PROCESSOR COMPONENT - PaymentProcessor
  * ====================================================================
+ * Processes payments without needing to know the specific payment type.
+ * It relies entirely on the PaymentStrategy abstraction.
  */
-class RoomInventory {
-    private Map<String, Integer> inventory;
-
-    public RoomInventory() {
-        inventory = new HashMap<>();
-        inventory.put("Single Room", 15);
-        inventory.put("Double Room", 10);
-        // Setting Suite Room to 0 to simulate an out-of-stock scenario for validation testing
-        inventory.put("Suite Room", 0);
-    }
-
-    public boolean isValidRoomType(String roomType) {
-        return inventory.containsKey(roomType);
-    }
-
-    public int getAvailability(String roomType) {
-        return inventory.getOrDefault(roomType, 0);
-    }
-
-    public void displayInventory() {
-        System.out.println("--------------------------------------------------");
-        System.out.println("            CURRENT ROOM INVENTORY                ");
-        System.out.println("--------------------------------------------------");
-        for (Map.Entry<String, Integer> entry : inventory.entrySet()) {
-            System.out.println(entry.getKey() + ": " + entry.getValue() + " available");
-        }
-        System.out.println("--------------------------------------------------\n");
-    }
-}
-
-/**
- * ====================================================================
- * VALIDATION COMPONENT - InvalidBookingValidator
- * ====================================================================
- * Validates input and system state before processing requests.
- */
-class InvalidBookingValidator {
-    /**
-     * Checks if a reservation is structurally and contextually valid.
-     * Throws InvalidBookingException at the first sign of invalid data (Fail-Fast).
-     */
-    public static void validate(Reservation reservation, RoomInventory inventory) throws InvalidBookingException {
-        // 1. Guard against empty or null guest names
-        if (reservation.getGuestName() == null || reservation.getGuestName().trim().isEmpty()) {
-            throw new InvalidBookingException("Validation Failed: Guest name cannot be empty.");
-        }
-
-        // 2. Guard against empty or null room types
-        if (reservation.getRequestedRoomType() == null || reservation.getRequestedRoomType().trim().isEmpty()) {
-            throw new InvalidBookingException("Validation Failed: Room type cannot be empty.");
-        }
-
-        // 3. Guard against non-existent room types (Case-sensitive check)
-        if (!inventory.isValidRoomType(reservation.getRequestedRoomType())) {
-            throw new InvalidBookingException("Validation Failed: Room type '" + reservation.getRequestedRoomType() + "' is invalid or unrecognized.");
-        }
-
-        // 4. Guard against overbooking (Check availability state)
-        if (inventory.getAvailability(reservation.getRequestedRoomType()) <= 0) {
-            throw new InvalidBookingException("Validation Failed: No availability for '" + reservation.getRequestedRoomType() + "'.");
-        }
+class PaymentProcessor {
+    public void processPayment(PaymentStrategy strategy, double amount) {
+        // Polymorphism in action: calling the specific implementation's pay method
+        strategy.pay(amount);
     }
 }
 
@@ -110,14 +53,14 @@ class InvalidBookingValidator {
  * MAIN CLASS - Application Entry
  * ====================================================================
  *
- * Use Case 9: Error Handling & Validation
+ * Use Case 10: Extensibility & Interface Abstraction
  *
  * Description:
- * Demonstrates fail-fast design, defensive programming, and the use of
- * custom exceptions to guard system state.
+ * Demonstrates the Strategy Pattern to decouple payment processing
+ * from specific payment methods, ensuring easy extensibility.
  *
  * @author Developer
- * @version 9.0
+ * @version 10.0
  */
 public class BookMyStayApp {
 
@@ -126,39 +69,23 @@ public class BookMyStayApp {
         System.out.println("Welcome to the Hotel Booking Management System");
         System.out.println("System initialized successfully.\n");
 
-        RoomInventory inventory = new RoomInventory();
+        // Initialize the Payment Processor
+        PaymentProcessor processor = new PaymentProcessor();
 
-        System.out.println("--- Current System State ---");
-        inventory.displayInventory();
+        System.out.println("--- Processing Payments ---");
 
-        System.out.println("--- Processing Booking Requests with Validation ---\n");
+        // 1. Process a Credit Card Payment
+        PaymentStrategy creditCard = new CreditCardPayment();
+        processor.processPayment(creditCard, 150.0);
 
-        // Prepare an array of test cases representing different validity states
-        Reservation[] testCases = {
-                new Reservation("Alice Smith", "Double Room"),           // Expected: SUCCESS
-                new Reservation("", "Single Room"),                      // Expected: FAIL (Missing Name)
-                new Reservation("Charlie Brown", "Penthouse Suite"),     // Expected: FAIL (Invalid Type)
-                new Reservation("Diana Prince", "Suite Room")            // Expected: FAIL (0 Availability)
-        };
+        // 2. Process a UPI Payment
+        PaymentStrategy upi = new UPIPayment();
+        processor.processPayment(upi, 50.0);
 
-        // Process requests using structured Try-Catch blocks
-        for (int i = 0; i < testCases.length; i++) {
-            Reservation req = testCases[i];
-            System.out.println("Processing Request " + (i + 1) + ": " + req.toString());
+        // 3. Process a Cash Payment
+        PaymentStrategy cash = new CashPayment();
+        processor.processPayment(cash, 200.0);
 
-            try {
-                // Attempt validation
-                InvalidBookingValidator.validate(req, inventory);
-
-                // If no exception is thrown, the flow continues here
-                System.out.println("SUCCESS: Validation passed. Proceeding with booking...\n");
-
-            } catch (InvalidBookingException e) {
-                // Catch our specific domain exception and handle it gracefully
-                System.out.println("ERROR: " + e.getMessage() + "\n");
-            }
-        }
-
-        System.out.println("Status: System gracefully handled all requests and remains stable.");
+        System.out.println("\nStatus: All payments processed successfully.");
     }
 }
