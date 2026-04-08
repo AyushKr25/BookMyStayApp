@@ -1,50 +1,139 @@
-/**
- * ====================================================================
- * INTERFACE ABSTRACTION - PaymentStrategy
- * ====================================================================
- * Defines a common contract for all payment methods.
- */
-interface PaymentStrategy {
-    void pay(double amount);
-}
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.Queue;
 
 /**
  * ====================================================================
- * CONCRETE STRATEGIES - Implementations of PaymentStrategy
+ * DOMAIN MODEL - Reservation
  * ====================================================================
  */
-class CreditCardPayment implements PaymentStrategy {
-    @Override
-    public void pay(double amount) {
-        System.out.println("Processing Credit Card payment of $" + amount);
-    }
-}
+class Reservation {
+    private String guestName;
+    private String requestedRoomType;
 
-class UPIPayment implements PaymentStrategy {
-    @Override
-    public void pay(double amount) {
-        System.out.println("Processing UPI payment of $" + amount);
+    public Reservation(String guestName, String requestedRoomType) {
+        this.guestName = guestName;
+        this.requestedRoomType = requestedRoomType;
     }
-}
 
-class CashPayment implements PaymentStrategy {
-    @Override
-    public void pay(double amount) {
-        System.out.println("Processing Cash payment of $" + amount);
-    }
+    public String getGuestName() { return guestName; }
+    public String getRequestedRoomType() { return requestedRoomType; }
 }
 
 /**
  * ====================================================================
- * PROCESSOR COMPONENT - PaymentProcessor
+ * THREAD-SAFE COMPONENT - SharedRoomInventory
  * ====================================================================
- * Processes payments without needing to know the specific payment type.
- * It relies entirely on the PaymentStrategy abstraction.
+ * Manages inventory. Methods that read and modify state are synchronized
+ * to prevent race conditions during concurrent access.
  */
-class PaymentProcessor {
-    public void processPayment(PaymentStrategy strategy, double amount) {
-        // Polymorphism in action: calling the specific implementation's pay method
-        strategy.pay(amount);
+class SharedRoomInventory {
+    private Map<String, Integer> inventory;
+
+    public SharedRoomInventory() {
+        inventory = new HashMap<>();
+        // Intentionally setting low availability to force contention among threads
+        inventory.put("Single Room", 2);
+        inventory.put("Double Room", 1);
+    }
+
+    /**
+     * CRITICAL SECTION: Synchronized method ensures only one thread can
+     * check availability and update inventory at any given time.
+     */
+    public synchronized boolean bookRoom(String roomType) {
+        int available = inventory.getOrDefault(roomType, 0);
+
+        if (available > 0) {
+            // Simulate processing delay to expose race conditions (if it wasn't synchronized)
+            try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+
+            // Deduct from inventory
+            inventory.put(roomType, available - 1);
+            return true;
+        }
+        return false; // No availability
+    }
+
+    public synchronized void displayInventory() {
+        System.out.println("--------------------------------------------------");
+        System.out.println("            FINAL ROOM INVENTORY STATE            ");
+        System.out.println("--------------------------------------------------");
+        for (Map.Entry<String, Integer> entry : inventory.entrySet()) {
+            System.out.println(entry.getKey() + ": " + entry.getValue() + " available");
+        }
+        System.out.println("--------------------------------------------------\n");
+    }
+}
+
+/**
+ * ====================================================================
+ * THREAD-SAFE COMPONENT - SharedBookingQueue
+ * ====================================================================
+ * A queue that multiple threads can safely read from and write to.
+ */
+class SharedBookingQueue {
+    private Queue<Reservation> requestQueue;
+
+    public SharedBookingQueue() {
+        this.requestQueue = new LinkedList<>();
+    }
+
+    public synchronized void addRequest(Reservation reservation) {
+        requestQueue.offer(reservation);
+    }
+
+    /**
+     * Safely retrieves and removes the next request from the queue.
+     */
+    public synchronized Reservation pollRequest() {
+        return requestQueue.poll();
+    }
+}
+
+/**
+ * ====================================================================
+ * WORKER THREAD - ConcurrentBookingProcessor
+ * ====================================================================
+ * Represents a worker thread that processes requests from the shared queue.
+ */
+class ConcurrentBookingProcessor implements Runnable {
+    private SharedBookingQueue queue;
+    private SharedRoomInventory inventory;
+    private String processorName;
+
+    public ConcurrentBookingProcessor(SharedBookingQueue queue, SharedRoomInventory inventory, String processorName) {
+        this.queue = queue;
+        this.inventory = inventory;
+        this.processorName = processorName;
+    }
+
+    @Override
+    public void run() {
+        while (true) {
+            // 1. Safely dequeue a request
+            Reservation req = queue.pollRequest();
+
+            // If queue is empty, the thread's work is done
+            if (req == null) {
+                break;
+            }
+
+            System.out.println(processorName + " is processing request for: " + req.getGuestName());
+
+            // 2. Attempt to book the room safely
+            boolean success = inventory.bookRoom(req.getRequestedRoomType());
+
+            if (success) {
+                System.out.println(" >>> SUCCESS: " + processorName + " booked a " + req.getRequestedRoomType() + " for " + req.getGuestName());
+            } else {
+                System.out.println(" >>> FAILED: " + processorName + " could not book a " + req.getRequestedRoomType() + " for " + req.getGuestName() + " (Out of Stock)");
+            }
+
+            // Yield to encourage thread context switching for the simulation
+            Thread.yield();
+        }
     }
 }
 
@@ -53,39 +142,52 @@ class PaymentProcessor {
  * MAIN CLASS - Application Entry
  * ====================================================================
  *
- * Use Case 10: Extensibility & Interface Abstraction
- *
- * Description:
- * Demonstrates the Strategy Pattern to decouple payment processing
- * from specific payment methods, ensuring easy extensibility.
+ * Use Case 11: Concurrent Booking Simulation (Thread Safety)
  *
  * @author Developer
- * @version 10.0
+ * @version 11.0
  */
 public class BookMyStayApp {
 
     public static void main(String[] args) {
-        // Application Startup
         System.out.println("Welcome to the Hotel Booking Management System");
-        System.out.println("System initialized successfully.\n");
+        System.out.println("System initialized successfully. Starting Concurrent Simulation...\n");
 
-        // Initialize the Payment Processor
-        PaymentProcessor processor = new PaymentProcessor();
+        // 1. Initialize Shared Resources
+        SharedRoomInventory sharedInventory = new SharedRoomInventory();
+        SharedBookingQueue sharedQueue = new SharedBookingQueue();
 
-        System.out.println("--- Processing Payments ---");
+        // 2. Load the Queue with more requests than available rooms
+        // We only have 2 Single Rooms and 1 Double Room available.
+        sharedQueue.addRequest(new Reservation("Alice", "Single Room"));
+        sharedQueue.addRequest(new Reservation("Bob", "Single Room"));
+        sharedQueue.addRequest(new Reservation("Charlie", "Single Room")); // Should fail
+        sharedQueue.addRequest(new Reservation("Diana", "Double Room"));
+        sharedQueue.addRequest(new Reservation("Eve", "Double Room"));     // Should fail
 
-        // 1. Process a Credit Card Payment
-        PaymentStrategy creditCard = new CreditCardPayment();
-        processor.processPayment(creditCard, 150.0);
+        // 3. Create Multiple Booking Processor Threads (Simulating concurrent users/servers)
+        Thread t1 = new Thread(new ConcurrentBookingProcessor(sharedQueue, sharedInventory, "Worker-Thread-1"));
+        Thread t2 = new Thread(new ConcurrentBookingProcessor(sharedQueue, sharedInventory, "Worker-Thread-2"));
+        Thread t3 = new Thread(new ConcurrentBookingProcessor(sharedQueue, sharedInventory, "Worker-Thread-3"));
 
-        // 2. Process a UPI Payment
-        PaymentStrategy upi = new UPIPayment();
-        processor.processPayment(upi, 50.0);
+        // 4. Start concurrent execution
+        System.out.println("--- Processing Bookings Concurrently ---");
+        t1.start();
+        t2.start();
+        t3.start();
 
-        // 3. Process a Cash Payment
-        PaymentStrategy cash = new CashPayment();
-        processor.processPayment(cash, 200.0);
+        // 5. Wait for all threads to finish processing before showing final state
+        try {
+            t1.join();
+            t2.join();
+            t3.join();
+        } catch (InterruptedException e) {
+            System.out.println("Main thread interrupted.");
+        }
 
-        System.out.println("\nStatus: All payments processed successfully.");
+        System.out.println("\nAll worker threads have finished processing.");
+
+        // 6. Display final inventory to prove no double-booking occurred (Inventory shouldn't drop below 0)
+        sharedInventory.displayInventory();
     }
 }
